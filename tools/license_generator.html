@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ASSI · Generador de Licencias</title>
+<style>
+body{font-family:system-ui,Arial,sans-serif;max-width:900px;margin:0 auto;padding:24px;background:#f6f7f9;color:#17202a}
+.card{background:#fff;border:1px solid #d9dee5;border-radius:14px;padding:18px;margin:14px 0}
+label{display:block;font-weight:600;margin-top:10px}
+input,textarea,button{font:inherit}
+input,textarea{width:100%;box-sizing:border-box;padding:10px;border:1px solid #bdc5cf;border-radius:8px;margin-top:5px}
+textarea{min-height:110px}
+button{padding:10px 14px;border:0;border-radius:8px;background:#17365d;color:#fff;font-weight:700;cursor:pointer;margin:8px 8px 0 0}
+.secondary{background:#5f6b78}
+.ok{color:#16723b;font-weight:700}.warn{color:#a04b00;font-weight:700}
+small{color:#5d6875}.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+@media(max-width:680px){.grid{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<h1>ASSI · Generador de Licencias</h1>
+<p><strong>Herramienta administrativa offline.</strong> La clave privada nunca debe subirse a GitHub ni enviarse a clientes.</p>
+
+<div class="card">
+<h2>1. Solicitud del cliente</h2>
+<label>Código de solicitud</label>
+<textarea id="requestCode" placeholder="ASSI-REQ-1...."></textarea>
+<button onclick="loadRequest()">Leer solicitud</button>
+<div id="reqStatus"></div>
+</div>
+
+<div class="card">
+<h2>2. Datos de licencia</h2>
+<div class="grid">
+<div><label>ID licencia</label><input id="licenseId"></div>
+<div><label>Dispositivo</label><input id="deviceId" readonly></div>
+<div><label>Cliente</label><input id="customer"></div>
+<div><label>Teléfono</label><input id="phone"></div>
+<div><label>Correo</label><input id="email"></div>
+<div><label>Edición</label><input id="edition" value="COMERCIAL"></div>
+<div><label>Vence licencia (opcional)</label><input id="expires" type="date"></div>
+<div><label>Actualizaciones hasta (opcional)</label><input id="updates" type="date"></div>
+</div>
+<small>Campos de fecha vacíos = licencia/actualizaciones sin vencimiento configurado.</small>
+</div>
+
+<div class="card">
+<h2>3. Firma</h2>
+<label>Clave privada PKCS#8 PEM</label>
+<input id="privateKey" type="file" accept=".pem,.key,text/plain">
+<button onclick="generateLicense()">GENERAR LICENCIA</button>
+<div id="genStatus"></div>
+<label>Licencia generada</label>
+<textarea id="licenseOut" readonly></textarea>
+<button class="secondary" onclick="copyLicense()">Copiar</button>
+<button class="secondary" onclick="downloadLicense()">Descargar .lic</button>
+</div>
+
+<script>
+var generatedToken = "";
+
+function b64urlEncode(bytes){
+  var binary="";
+  var arr=new Uint8Array(bytes);
+  for(var i=0;i<arr.length;i++) binary+=String.fromCharCode(arr[i]);
+  return btoa(binary).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,"");
+}
+function b64urlDecode(s){
+  s=s.replace(/-/g,"+").replace(/_/g,"/");
+  while(s.length%4) s+="=";
+  var binary=atob(s);
+  var out=new Uint8Array(binary.length);
+  for(var i=0;i<binary.length;i++) out[i]=binary.charCodeAt(i);
+  return out;
+}
+function utf8(s){return new TextEncoder().encode(s);}
+function text(bytes){return new TextDecoder().decode(bytes);}
+function todayId(){
+  var d=new Date();
+  function p(v){return String(v).padStart(2,"0");}
+  return "LIC-"+d.getFullYear()+p(d.getMonth()+1)+p(d.getDate())+"-"+p(d.getHours())+p(d.getMinutes())+p(d.getSeconds());
+}
+function loadRequest(){
+  try{
+    var code=document.getElementById("requestCode").value.trim();
+    if(!code.startsWith("ASSI-REQ-1.")) throw new Error("Formato de solicitud no reconocido.");
+    var obj=JSON.parse(text(b64urlDecode(code.substring("ASSI-REQ-1.".length))));
+    document.getElementById("deviceId").value=obj.deviceId||"";
+    document.getElementById("customer").value=obj.customer||"";
+    document.getElementById("phone").value=obj.phone||"";
+    document.getElementById("email").value=obj.email||"";
+    document.getElementById("licenseId").value=todayId();
+    document.getElementById("reqStatus").innerHTML='<p class="ok">Solicitud válida para '+(obj.deviceId||"")+'.</p>';
+  }catch(e){
+    document.getElementById("reqStatus").innerHTML='<p class="warn">'+e.message+'</p>';
+  }
+}
+function pemToDer(pem){
+  var clean=pem.replace(/-----BEGIN [^-]+-----/g,"").replace(/-----END [^-]+-----/g,"").replace(/\s+/g,"");
+  var bin=atob(clean), out=new Uint8Array(bin.length);
+  for(var i=0;i<bin.length;i++) out[i]=bin.charCodeAt(i);
+  return out.buffer;
+}
+function trimInt(bytes){
+  var a=Array.from(bytes);
+  while(a.length>1 && a[0]===0 && (a[1]&0x80)===0) a.shift();
+  if(a[0]&0x80) a.unshift(0);
+  return a;
+}
+function rawEcdsaToDer(raw){
+  var b=new Uint8Array(raw);
+  if(b.length!==64) return b;
+  var r=trimInt(b.slice(0,32));
+  var s=trimInt(b.slice(32,64));
+  var len=2+r.length+2+s.length;
+  var out=[0x30,len,0x02,r.length].concat(r,[0x02,s.length],s);
+  return new Uint8Array(out);
+}
+function dateEpoch(id){
+  var v=document.getElementById(id).value;
+  if(!v) return 0;
+  return Math.floor(new Date(v+"T23:59:59").getTime()/1000);
+}
+async function generateLicense(){
+  try{
+    var file=document.getElementById("privateKey").files[0];
+    if(!file) throw new Error("Seleccione la clave privada PKCS#8.");
+    var deviceId=document.getElementById("deviceId").value.trim();
+    if(!deviceId) throw new Error("Primero lea una solicitud válida.");
+    var licenseId=document.getElementById("licenseId").value.trim();
+    if(!licenseId) throw new Error("El ID de licencia es obligatorio.");
+
+    var pem=await file.text();
+    var key=await crypto.subtle.importKey(
+      "pkcs8",pemToDer(pem),{name:"ECDSA",namedCurve:"P-256"},false,["sign"]
+    );
+
+    var payload={
+      version:1,
+      licenseId:licenseId,
+      customer:document.getElementById("customer").value.trim(),
+      phone:document.getElementById("phone").value.trim(),
+      email:document.getElementById("email").value.trim(),
+      deviceId:deviceId,
+      edition:document.getElementById("edition").value.trim()||"COMERCIAL",
+      issuedAtEpochSec:Math.floor(Date.now()/1000),
+      expiresAtEpochSec:dateEpoch("expires"),
+      updatesUntilEpochSec:dateEpoch("updates")
+    };
+    var payloadText=JSON.stringify(payload);
+    var payloadBytes=utf8(payloadText);
+    var rawSig=await crypto.subtle.sign({name:"ECDSA",hash:"SHA-256"},key,payloadBytes);
+    var derSig=rawEcdsaToDer(rawSig);
+    generatedToken="ASSI-LIC-1."+b64urlEncode(payloadBytes)+"."+b64urlEncode(derSig);
+    document.getElementById("licenseOut").value=generatedToken;
+    document.getElementById("genStatus").innerHTML='<p class="ok">Licencia generada y firmada.</p>';
+  }catch(e){
+    document.getElementById("genStatus").innerHTML='<p class="warn">'+e.message+'</p>';
+  }
+}
+async function copyLicense(){
+  if(generatedToken) await navigator.clipboard.writeText(generatedToken);
+}
+function downloadLicense(){
+  if(!generatedToken) return;
+  var id=document.getElementById("licenseId").value.trim()||"licencia";
+  var blob=new Blob([generatedToken],{type:"text/plain;charset=utf-8"});
+  var a=document.createElement("a");
+  a.href=URL.createObjectURL(blob);
+  a.download="ASSI_"+id+".lic";
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+</script>
+</body>
+</html>
