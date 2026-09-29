@@ -152,10 +152,6 @@ object QuoteShareUtil {
             paint
         )
 
-        if (p.demo) {
-            paint.save()
-        }
-
         paint.textSize = 22f
         canvas.drawText(
             "Moneda de salida: ${p.currencyCode.uppercase(Locale.US)} · Generado por CotiRuta.",
