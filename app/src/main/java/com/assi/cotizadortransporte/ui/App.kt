@@ -31,7 +31,7 @@ private enum class Screen(val label: String) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun TransportCostApp(vm: AppViewModel) {
+fun TransportCostApp(vm: AppViewModel, darkMode: Boolean, onDarkModeChange: (Boolean) -> Unit) {
     val vehicles by vm.vehicles.collectAsStateWithLifecycle()
     val params by vm.parameters.collectAsStateWithLifecycle()
     val quotes by vm.quotes.collectAsStateWithLifecycle()
@@ -47,7 +47,19 @@ fun TransportCostApp(vm: AppViewModel) {
     }
 
     Scaffold(
-        topBar = { TopAppBar(title = { Text("ASSI · Cotizador Transporte") }) },
+        topBar = {
+            TopAppBar(
+                title = { Text("ASSI · Cotizador") },
+                actions = {
+                    Text("Oscuro", style = MaterialTheme.typography.labelMedium)
+                    Switch(
+                        checked = darkMode,
+                        onCheckedChange = onDarkModeChange,
+                        modifier = Modifier.padding(horizontal = 8.dp)
+                    )
+                }
+            )
+        },
         snackbarHost = { SnackbarHost(snackbarHost) },
         bottomBar = {
             NavigationBar {
@@ -65,7 +77,7 @@ fun TransportCostApp(vm: AppViewModel) {
         Box(Modifier.padding(padding).fillMaxSize()) {
             when (screen) {
                 Screen.QUOTE -> QuoteScreen(vehicles, params, vm::saveQuote)
-                Screen.VEHICLES -> VehiclesScreen(vehicles, vm::importVehicles)
+                Screen.VEHICLES -> VehiclesScreen(vehicles, vm::importVehicles, vm::saveVehicle)
                 Screen.PARAMETERS -> ParametersScreen(params, vm::saveParameters)
                 Screen.HISTORY -> HistoryScreen(quotes)
             }
@@ -113,7 +125,7 @@ private fun QuoteScreen(
     ) {
         Text("Nueva oferta", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
         if (vehicles.isEmpty()) {
-            ElevatedCard { Text("Primero importe el catálogo de vehículos desde XLSX o CSV.", Modifier.padding(16.dp)) }
+            ElevatedCard { Text("Primero cree un vehículo o importe el catálogo desde XLSX o CSV.", Modifier.padding(16.dp)) }
             return@Column
         }
 
@@ -300,36 +312,181 @@ private fun ClientSummary(service: String, origin: String, destination: String, 
 }
 
 @Composable
-private fun VehiclesScreen(vehicles: List<VehicleEntity>, onImport: (Uri, Boolean) -> Unit) {
+private fun VehiclesScreen(
+    vehicles: List<VehicleEntity>,
+    onImport: (Uri, Boolean) -> Unit,
+    onSaveVehicle: (VehicleEntity) -> Unit
+) {
     var replace by remember { mutableStateOf(false) }
+    var showNewVehicle by rememberSaveable { mutableStateOf(false) }
     val launcher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         uri?.let { onImport(it, replace) }
     }
+
+    if (showNewVehicle) {
+        VehicleFormDialog(
+            existingIds = vehicles.map { it.id.uppercase(Locale.getDefault()) }.toSet(),
+            onDismiss = { showNewVehicle = false },
+            onSave = {
+                onSaveVehicle(it)
+                showNewVehicle = false
+            }
+        )
+    }
+
     Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("Vehículos", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-        Text("Importa la hoja Vehiculos del Excel o un CSV con los mismos encabezados.")
+        Text("Puede crear vehículos manualmente o importar la hoja Vehiculos del Excel / CSV.")
+
+        Button(
+            onClick = { showNewVehicle = true },
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text("NUEVO VEHÍCULO")
+        }
+
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(onClick = { replace = false; launcher.launch(arrayOf("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "text/csv", "text/comma-separated-values")) }) {
+            Button(
+                onClick = {
+                    replace = false
+                    launcher.launch(arrayOf(
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        "text/csv",
+                        "text/comma-separated-values"
+                    ))
+                },
+                modifier = Modifier.weight(1f)
+            ) {
                 Text("Importar / actualizar")
             }
-            OutlinedButton(onClick = { replace = true; launcher.launch(arrayOf("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "text/csv", "text/comma-separated-values")) }) {
+            OutlinedButton(
+                onClick = {
+                    replace = true
+                    launcher.launch(arrayOf(
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        "text/csv",
+                        "text/comma-separated-values"
+                    ))
+                },
+                modifier = Modifier.weight(1f)
+            ) {
                 Text("Reemplazar catálogo")
             }
         }
+
         HorizontalDivider()
-        if (vehicles.isEmpty()) Text("Catálogo vacío.")
-        Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        if (vehicles.isEmpty()) Text("Catálogo vacío. Cree el primer vehículo o importe un archivo.")
+
+        Column(
+            Modifier.weight(1f).verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
             vehicles.forEach { v ->
                 ElevatedCard(Modifier.fillMaxWidth()) {
-                    Column(Modifier.padding(12.dp)) {
+                    Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                         Text("${v.id} · ${v.name}", fontWeight = FontWeight.Bold)
                         if (v.serviceType.isNotBlank()) Text(v.serviceType)
+                        Text("Vehículo: ${usd(v.vehicleValueUsd)} · Equipo: ${usd(v.equipmentValueUsd)}")
                         Text("AFT: ${usd(v.totalAftUsd)} · Consumo: ${format2(v.fuelKmPerLiter)} km/L")
+                        if (v.notes.isNotBlank()) Text(v.notes, style = MaterialTheme.typography.bodySmall)
                     }
                 }
             }
         }
     }
+}
+
+@Composable
+private fun VehicleFormDialog(
+    existingIds: Set<String>,
+    onDismiss: () -> Unit,
+    onSave: (VehicleEntity) -> Unit
+) {
+    var id by rememberSaveable { mutableStateOf("") }
+    var name by rememberSaveable { mutableStateOf("") }
+    var serviceType by rememberSaveable { mutableStateOf("") }
+    var vehicleValue by rememberSaveable { mutableStateOf("") }
+    var equipmentValue by rememberSaveable { mutableStateOf("0") }
+    var fuelConsumption by rememberSaveable { mutableStateOf("") }
+    var notes by rememberSaveable { mutableStateOf("") }
+    var error by rememberSaveable { mutableStateOf<String?>(null) }
+
+    val vehicleUsd = parseNumber(vehicleValue)
+    val equipmentUsd = parseNumber(equipmentValue)
+    val calculatedAft = (vehicleUsd ?: 0.0) + (equipmentUsd ?: 0.0)
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Nuevo vehículo / configuración") },
+        text = {
+            Column(
+                Modifier.heightIn(max = 520.dp).verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Field("ID único", id) { id = it; error = null }
+                Field("Vehículo / configuración", name) { name = it; error = null }
+                Field("Tipo de servicio", serviceType) { serviceType = it }
+                NumberField("Valor vehículo USD", vehicleValue) { vehicleValue = it; error = null }
+                NumberField("Valor equipo / remolque USD", equipmentValue) { equipmentValue = it; error = null }
+                NumberField("Índice de consumo km/L", fuelConsumption) { fuelConsumption = it; error = null }
+                Text(
+                    "Valor total AFT: ${usd(calculatedAft)}",
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                OutlinedTextField(
+                    value = notes,
+                    onValueChange = { notes = it },
+                    label = { Text("Observaciones") },
+                    modifier = Modifier.fillMaxWidth(),
+                    minLines = 2,
+                    maxLines = 4
+                )
+                error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    val cleanId = id.trim()
+                    val cleanName = name.trim()
+                    val v = parseNumber(vehicleValue)
+                    val e = parseNumber(equipmentValue)
+                    val fuel = parseNumber(fuelConsumption)
+
+                    error = when {
+                        cleanId.isBlank() -> "El ID es obligatorio."
+                        existingIds.contains(cleanId.uppercase(Locale.getDefault())) -> "Ya existe un vehículo con ese ID."
+                        cleanName.isBlank() -> "El nombre o configuración es obligatorio."
+                        v == null || v < 0.0 -> "Valor del vehículo inválido."
+                        e == null || e < 0.0 -> "Valor del equipo inválido."
+                        fuel == null || fuel <= 0.0 -> "El consumo km/L debe ser mayor que cero."
+                        else -> null
+                    }
+
+                    if (error == null) {
+                        onSave(
+                            VehicleEntity(
+                                id = cleanId,
+                                name = cleanName,
+                                serviceType = serviceType.trim(),
+                                vehicleValueUsd = v!!,
+                                equipmentValueUsd = e!!,
+                                totalAftUsd = v + e,
+                                fuelKmPerLiter = fuel!!,
+                                notes = notes.trim()
+                            )
+                        )
+                    }
+                }
+            ) {
+                Text("GUARDAR")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancelar") }
+        }
+    )
 }
 
 @Composable
