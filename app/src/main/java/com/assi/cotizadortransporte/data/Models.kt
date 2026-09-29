@@ -27,7 +27,9 @@ data class CostParametersEntity(
     val annualReferenceKm: Double = 100000.0,
     val offerRoundingUsd: Double = 5.0,
     val standardDailySalaryUsd: Double = 43.15,
-    val standardDailyDietUsd: Double = 5.115
+    val standardDailyDietUsd: Double = 5.115,
+    val outputCurrency: String = "USD",
+    val outputExchangeRatePerUsd: Double = 1.0
 )
 
 @Entity(tableName = "quotes")
@@ -49,5 +51,7 @@ data class QuoteEntity(
     val commercialMarginPct: Double,
     val calculatedPriceUsd: Double,
     val offerPriceUsd: Double,
-    val offerPricePerKmUsd: Double
+    val offerPricePerKmUsd: Double,
+    val currencyCode: String = "USD",
+    val currencyRatePerUsd: Double = 1.0
 )
