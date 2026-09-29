@@ -142,8 +142,6 @@ private fun QuoteScreen(
     var drivers by rememberSaveable { mutableStateOf("1") }
     var salary by rememberSaveable { mutableStateOf("") }
     var diet by rememberSaveable { mutableStateOf("") }
-    var outputCurrency by rememberSaveable { mutableStateOf("USD") }
-    var outputRate by rememberSaveable { mutableStateOf("1") }
     var marginOverride by rememberSaveable { mutableStateOf("") }
     var selectedId by rememberSaveable { mutableStateOf("") }
     var result by remember { mutableStateOf<QuoteCalculator.Result?>(null) }
@@ -677,7 +675,7 @@ private fun LicenseScreen(
                     OutlinedButton(
                         onClick = {
                             val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                            clipboard.setPrimaryClip(ClipData.newPlainText("Solicitud licencia ASSI", requestCode))
+                            clipboard.setPrimaryClip(ClipData.newPlainText("Solicitud licencia CotiRuta", requestCode))
                             localMessage = "Código copiado."
                         },
                         modifier = Modifier.weight(1f)
@@ -689,7 +687,7 @@ private fun LicenseScreen(
                             if (LicenseManager.LICENSE_REQUEST_EMAIL.isNotBlank()) {
                                 val intent = Intent(Intent.ACTION_SENDTO).apply {
                                     data = Uri.parse("mailto:${LicenseManager.LICENSE_REQUEST_EMAIL}")
-                                    putExtra(Intent.EXTRA_SUBJECT, "Solicitud licencia ASSI · ${LicenseManager.deviceId(context)}")
+                                    putExtra(Intent.EXTRA_SUBJECT, "Solicitud licencia CotiRuta · ${LicenseManager.deviceId(context)}")
                                     putExtra(Intent.EXTRA_TEXT, body)
                                 }
                                 runCatching { context.startActivity(intent) }
@@ -697,7 +695,7 @@ private fun LicenseScreen(
                             } else {
                                 val intent = Intent(Intent.ACTION_SEND).apply {
                                     type = "text/plain"
-                                    putExtra(Intent.EXTRA_SUBJECT, "Solicitud licencia ASSI")
+                                    putExtra(Intent.EXTRA_SUBJECT, "Solicitud licencia CotiRuta")
                                     putExtra(Intent.EXTRA_TEXT, body)
                                 }
                                 context.startActivity(Intent.createChooser(intent, "Enviar solicitud"))
@@ -782,6 +780,8 @@ private fun ParametersScreen(
     var rounding by rememberSaveable { mutableStateOf("") }
     var salary by rememberSaveable { mutableStateOf("") }
     var diet by rememberSaveable { mutableStateOf("") }
+    var outputCurrency by rememberSaveable { mutableStateOf("USD") }
+    var outputRate by rememberSaveable { mutableStateOf("1") }
 
     LaunchedEffect(p) {
         margin = fmtInput(p.commercialMarginPct * 100)
