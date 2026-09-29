@@ -189,10 +189,111 @@ fun TransportCostApp(
 }
 
 @Composable
+private fun HomeScreen(
+    demoMode: Boolean,
+    demoStatus: DemoManager.Status,
+    vehicles: List<VehicleEntity>,
+    quotes: List<QuoteEntity>,
+    onNewQuote: () -> Unit,
+    onOpenLicense: () -> Unit,
+    onOpenHistory: () -> Unit
+) {
+    Column(
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+        Text("CotiRuta", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+        Text(
+            "Conozca el costo real del viaje y defina una tarifa comercial sustentada.",
+            style = MaterialTheme.typography.bodyLarge
+        )
+
+        if (demoMode) {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Modo Demo", fontWeight = FontWeight.Bold)
+                    Text(
+                        if (demoStatus.exhausted)
+                            "Ha utilizado las 10 cotizaciones de demostración."
+                        else
+                            "${demoStatus.remainingCalculations} de ${DemoManager.MAX_CALCULATIONS} cotizaciones de prueba disponibles."
+                    )
+                    Text(
+                        "Puede probar hasta ${DemoManager.MAX_VEHICLES} vehículos. Los documentos generados incluyen la marca DEMO.",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    Button(onClick = onOpenLicense, modifier = Modifier.fillMaxWidth()) {
+                        Text("ACTIVAR LICENCIA")
+                    }
+                }
+            }
+        } else {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(Modifier.padding(16.dp)) {
+                    Text("Licencia activa", fontWeight = FontWeight.Bold)
+                    Text("Funciones completas y cotizaciones ilimitadas.")
+                }
+            }
+        }
+
+        Button(
+            onClick = onNewQuote,
+            enabled = !demoMode || !demoStatus.exhausted,
+            modifier = Modifier.fillMaxWidth().height(56.dp)
+        ) {
+            Text(if (demoMode && demoStatus.exhausted) "DEMO FINALIZADA" else "NUEVA COTIZACIÓN")
+        }
+
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            ElevatedCard(Modifier.weight(1f)) {
+                Column(Modifier.padding(14.dp)) {
+                    Text("Flota", style = MaterialTheme.typography.labelLarge)
+                    Text("${vehicles.size}", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+                }
+            }
+            ElevatedCard(Modifier.weight(1f)) {
+                Column(Modifier.padding(14.dp)) {
+                    Text("Historial", style = MaterialTheme.typography.labelLarge)
+                    Text(
+                        if (demoMode) "${minOf(quotes.size, DemoManager.MAX_HISTORY_VISIBLE)}" else "${quotes.size}",
+                        style = MaterialTheme.typography.headlineMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+        }
+
+        if (quotes.isNotEmpty()) {
+            Text("Cotización reciente", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            val q = quotes.first()
+            ElevatedCard(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(q.service, fontWeight = FontWeight.Bold)
+                    Text("${q.origin.ifBlank { "—" }} → ${q.destination.ifBlank { "—" }}")
+                    Text(money(q.offerPriceUsd, q.currencyCode, q.currencyRatePerUsd), color = MaterialTheme.colorScheme.primary)
+                    TextButton(onClick = onOpenHistory) { Text("VER HISTORIAL") }
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun QuoteScreen(
     vehicles: List<VehicleEntity>,
     params: CostParametersEntity,
     showHelp: Boolean,
+    demoMode: Boolean,
+    demoStatus: DemoManager.Status,
+    template: QuoteEntity?,
+    businessProfile: BusinessProfileManager.Profile,
+    onDemoCalculationUsed: () -> Unit,
     onSave: (QuoteEntity) -> Unit
 ) {
     val context = LocalContext.current
@@ -211,6 +312,23 @@ private fun QuoteScreen(
     var result by remember { mutableStateOf<QuoteCalculator.Result?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
 
+    LaunchedEffect(template?.id) {
+        template?.let { q ->
+            client = q.client
+            service = q.service
+            origin = q.origin
+            destination = q.destination
+            roundTrip = q.tripType.equals("Redondo", ignoreCase = true)
+            baseKm = fmtInput(q.baseDistanceKm)
+            days = q.days.toString()
+            drivers = q.drivers.toString()
+            selectedId = q.vehicleId
+            marginOverride = fmtInput(q.commercialMarginPct * 100)
+            result = null
+            error = null
+        }
+    }
+
     LaunchedEffect(params.standardDailySalaryUsd, params.standardDailyDietUsd) {
         if (salary.isBlank()) salary = fmtInput(params.standardDailySalaryUsd)
         if (diet.isBlank()) diet = fmtInput(params.standardDailyDietUsd)
@@ -227,7 +345,24 @@ private fun QuoteScreen(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        Text("Nueva oferta", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+        Text(
+            if (template != null) "Duplicar cotización" else "Nueva oferta",
+            style = MaterialTheme.typography.headlineSmall,
+            fontWeight = FontWeight.Bold
+        )
+        if (demoMode) {
+            AssistChip(
+                onClick = {},
+                label = {
+                    Text(
+                        if (demoStatus.exhausted)
+                            "Demo finalizada"
+                        else
+                            "Demo · ${demoStatus.remainingCalculations} cotizaciones disponibles"
+                    )
+                }
+            )
+        }
         if (showHelp) {
             HelpCard(
                 "Cómo cotizar",
@@ -276,6 +411,10 @@ private fun QuoteScreen(
         Button(
             onClick = {
                 error = null
+                if (demoMode && demoStatus.exhausted) {
+                    error = "Ha utilizado las 10 cotizaciones de demostración. Active una licencia para continuar."
+                    return@Button
+                }
                 runCatching {
                     val v = requireNotNull(selected) { "Seleccione un vehículo." }
                     val km = distance
@@ -285,7 +424,10 @@ private fun QuoteScreen(
                     val die = parseNumber(diet) ?: 0.0
                     val margin = parseNumber(marginOverride)?.div(100.0)
                     QuoteCalculator.calculate(v, params, QuoteCalculator.Input(km, d, ch, sal, die, margin))
-                }.onSuccess { result = it }.onFailure { error = it.message }
+                }.onSuccess {
+                    result = it
+                    if (demoMode) onDemoCalculationUsed()
+                }.onFailure { error = it.message }
             },
             modifier = Modifier.fillMaxWidth()
         ) { Text("CALCULAR OFERTA") }
@@ -327,13 +469,13 @@ private fun QuoteScreen(
                 ) { Text("Guardar") }
                 OutlinedButton(
                     onClick = {
-                        QuoteShareUtil.shareImage(context, presentation(client, service, origin, destination, roundTrip, distance, selected, days, r, params))
+                        QuoteShareUtil.shareImage(context, presentation(client, service, origin, destination, roundTrip, distance, selected, days, r, params, businessProfile, demoMode))
                     },
                     modifier = Modifier.weight(1f)
                 ) { Text("Imagen") }
                 OutlinedButton(
                     onClick = {
-                        QuoteShareUtil.sharePdf(context, presentation(client, service, origin, destination, roundTrip, distance, selected, days, r, params))
+                        QuoteShareUtil.sharePdf(context, presentation(client, service, origin, destination, roundTrip, distance, selected, days, r, params, businessProfile, demoMode))
                     },
                     modifier = Modifier.weight(1f)
                 ) { Text("PDF") }
@@ -346,7 +488,8 @@ private fun QuoteScreen(
 private fun presentation(
     client: String, service: String, origin: String, destination: String,
     roundTrip: Boolean, distance: Double, vehicle: VehicleEntity, days: String,
-    r: QuoteCalculator.Result, params: CostParametersEntity
+    r: QuoteCalculator.Result, params: CostParametersEntity,
+    businessProfile: BusinessProfileManager.Profile, demoMode: Boolean
 ) = QuoteShareUtil.Presentation(
     client = client,
     service = service,
@@ -359,7 +502,11 @@ private fun presentation(
     offerPriceUsd = r.offerPriceUsd,
     pricePerKmUsd = r.offerPricePerKmUsd,
     currencyCode = params.outputCurrency.uppercase(Locale.US),
-    currencyRatePerUsd = safeRate(params.outputExchangeRatePerUsd)
+    currencyRatePerUsd = safeRate(params.outputExchangeRatePerUsd),
+    entityName = businessProfile.name,
+    entityContact = businessProfile.contact,
+    logoUri = businessProfile.logoUri,
+    demo = demoMode
 )
 
 @Composable
