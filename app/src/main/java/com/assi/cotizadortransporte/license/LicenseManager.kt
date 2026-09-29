@@ -22,7 +22,7 @@ object LicenseManager {
         "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAndWd9gi2qMuyuwCr3hNj6zkjpbrIKt3vpq5hjTgn0Ydzk3mvmKnO+CzV1g2jqiH2vCROjuM5W0JG2Jg9rjyBw=="
 
     // Se configura cuando el propietario indique el correo definitivo de licencias.
-    const val LICENSE_REQUEST_EMAIL = ""
+    const val LICENSE_REQUEST_EMAIL = "kcodguez@gmail.com"
 
     data class Status(
         val valid: Boolean,
