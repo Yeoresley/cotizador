@@ -46,16 +46,43 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun importVehicles(uri: Uri, replace: Boolean) {
+    fun importVehicles(uri: Uri, replace: Boolean, maxVehiclesTotal: Int? = null) {
         viewModelScope.launch {
             runCatching { VehicleImportParser.parse(getApplication(), uri) }
                 .onSuccess { result ->
                     if (result.vehicles.isEmpty()) {
                         _message.value = "No se encontraron vehículos válidos para importar."
                     } else {
-                        repo.importVehicles(result.vehicles, replace)
-                        val skipped = if (result.skippedRows > 0) " · ${result.skippedRows} fila(s) omitida(s)" else ""
-                        _message.value = "${result.vehicles.size} vehículo(s) importado(s)$skipped."
+                        val imported = if (maxVehiclesTotal == null) {
+                            result.vehicles
+                        } else if (replace) {
+                            result.vehicles.take(maxVehiclesTotal)
+                        } else {
+                            val currentIds = vehicles.value.map { it.id }.toMutableSet()
+                            val accepted = mutableListOf<VehicleEntity>()
+                            var total = currentIds.size
+                            result.vehicles.forEach { item ->
+                                if (item.id in currentIds) {
+                                    accepted += item
+                                } else if (total < maxVehiclesTotal) {
+                                    accepted += item
+                                    currentIds += item.id
+                                    total++
+                                }
+                            }
+                            accepted
+                        }
+
+                        if (imported.isEmpty()) {
+                            _message.value = "El límite del modo Demo no permite agregar más vehículos."
+                        } else {
+                            repo.importVehicles(imported, replace)
+                            val limited = if (maxVehiclesTotal != null && imported.size < result.vehicles.size) {
+                                " · catálogo limitado por el modo Demo"
+                            } else ""
+                            val skipped = if (result.skippedRows > 0) " · ${result.skippedRows} fila(s) omitida(s)" else ""
+                            _message.value = "${imported.size} vehículo(s) importado(s)$limited$skipped."
+                        }
                     }
                 }
                 .onFailure { _message.value = it.message ?: "Error al importar el archivo." }
