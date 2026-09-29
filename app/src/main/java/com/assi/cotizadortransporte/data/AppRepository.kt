@@ -14,6 +14,8 @@ class AppRepository(private val dao: AppDao) {
 
     suspend fun saveParameters(item: CostParametersEntity) = dao.saveParameters(item)
 
+    suspend fun saveVehicle(item: VehicleEntity) = dao.upsertVehicles(listOf(item))
+
     suspend fun importVehicles(items: List<VehicleEntity>, replace: Boolean) {
         if (replace) dao.deleteAllVehicles()
         dao.upsertVehicles(items)
