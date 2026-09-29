@@ -23,8 +23,10 @@ import com.assi.cotizadortransporte.BuildConfig
 import com.assi.cotizadortransporte.data.CostParametersEntity
 import com.assi.cotizadortransporte.data.QuoteEntity
 import com.assi.cotizadortransporte.data.VehicleEntity
+import com.assi.cotizadortransporte.demo.DemoManager
 import com.assi.cotizadortransporte.domain.QuoteCalculator
 import com.assi.cotizadortransporte.license.LicenseManager
+import com.assi.cotizadortransporte.profile.BusinessProfileManager
 import com.assi.cotizadortransporte.share.QuoteShareUtil
 import java.text.NumberFormat
 import java.text.SimpleDateFormat
@@ -32,7 +34,7 @@ import java.util.Date
 import java.util.Locale
 
 private enum class Screen(val label: String) {
-    QUOTE("Cotizar"), VEHICLES("Flota"), PARAMETERS("Ajustes"), HISTORY("Historial"), LICENSE("Licencia")
+    HOME("Inicio"), QUOTE("Cotizar"), VEHICLES("Flota"), HISTORY("Historial"), PARAMETERS("Ajustes")
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -49,25 +51,34 @@ fun TransportCostApp(
     val params by vm.parameters.collectAsStateWithLifecycle()
     val quotes by vm.quotes.collectAsStateWithLifecycle()
     val message by vm.message.collectAsStateWithLifecycle()
-    var screen by rememberSaveable { mutableStateOf(Screen.QUOTE) }
+    var screen by rememberSaveable { mutableStateOf(Screen.HOME) }
     var licenseStatus by remember { mutableStateOf(LicenseManager.currentStatus(context)) }
+    var demoStatus by remember { mutableStateOf(DemoManager.status(context)) }
+    var businessProfile by remember { mutableStateOf(BusinessProfileManager.load(context)) }
     var showAbout by rememberSaveable { mutableStateOf(false) }
+    var showLicense by rememberSaveable { mutableStateOf(false) }
+    var duplicateQuote by remember { mutableStateOf<QuoteEntity?>(null) }
     val snackbarHost = remember { SnackbarHostState() }
 
     if (showAbout) {
         AboutDialog(onDismiss = { showAbout = false })
     }
 
-    val licensedForUse = licenseStatus.valid || BuildConfig.DEBUG
-    if (!licensedForUse) {
+    if (showLicense) {
         LicenseScreen(
             status = licenseStatus,
-            onStatusChanged = { licenseStatus = it },
+            onStatusChanged = {
+                licenseStatus = it
+                showLicense = false
+            },
             darkMode = darkMode,
-            onDarkModeChange = onDarkModeChange
+            onDarkModeChange = onDarkModeChange,
+            onBack = { showLicense = false }
         )
         return
     }
+
+    val demoMode = !licenseStatus.valid
 
     LaunchedEffect(message) {
         message?.let {
@@ -81,7 +92,16 @@ fun TransportCostApp(
             TopAppBar(
                 title = {
                     Column {
-                        Text("CotiRuta", fontWeight = FontWeight.Bold)
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("CotiRuta", fontWeight = FontWeight.Bold)
+                            if (demoMode) {
+                                Spacer(Modifier.width(8.dp))
+                                AssistChip(
+                                    onClick = { showLicense = true },
+                                    label = { Text("DEMO") }
+                                )
+                            }
+                        }
                         Text("Costos y tarifas de transporte", style = MaterialTheme.typography.labelSmall)
                     }
                 },
@@ -114,11 +134,55 @@ fun TransportCostApp(
     ) { padding ->
         Box(Modifier.padding(padding).fillMaxSize()) {
             when (screen) {
-                Screen.QUOTE -> QuoteScreen(vehicles, params, showHelp, vm::saveQuote)
-                Screen.VEHICLES -> VehiclesScreen(vehicles, showHelp, vm::importVehicles, vm::saveVehicle)
-                Screen.PARAMETERS -> ParametersScreen(params, showHelp, vm::saveParameters)
-                Screen.HISTORY -> HistoryScreen(quotes, showHelp)
-                Screen.LICENSE -> LicenseScreen(licenseStatus, { licenseStatus = it }, darkMode, onDarkModeChange)
+                Screen.HOME -> HomeScreen(
+                    demoMode = demoMode,
+                    demoStatus = demoStatus,
+                    vehicles = vehicles,
+                    quotes = quotes,
+                    onNewQuote = {
+                        duplicateQuote = null
+                        screen = Screen.QUOTE
+                    },
+                    onOpenLicense = { showLicense = true },
+                    onOpenHistory = { screen = Screen.HISTORY }
+                )
+                Screen.QUOTE -> QuoteScreen(
+                    vehicles = vehicles,
+                    params = params,
+                    showHelp = showHelp,
+                    demoMode = demoMode,
+                    demoStatus = demoStatus,
+                    template = duplicateQuote,
+                    businessProfile = businessProfile,
+                    onDemoCalculationUsed = { demoStatus = DemoManager.consumeCalculation(context) },
+                    onSave = vm::saveQuote
+                )
+                Screen.VEHICLES -> VehiclesScreen(
+                    vehicles = vehicles,
+                    showHelp = showHelp,
+                    demoMode = demoMode,
+                    onImport = { uri, replace ->
+                        vm.importVehicles(uri, replace, if (demoMode) DemoManager.MAX_VEHICLES else null)
+                    },
+                    onSaveVehicle = vm::saveVehicle
+                )
+                Screen.HISTORY -> HistoryScreen(
+                    items = if (demoMode) quotes.take(DemoManager.MAX_HISTORY_VISIBLE) else quotes,
+                    showHelp = showHelp,
+                    demoMode = demoMode,
+                    onDuplicate = { q ->
+                        duplicateQuote = q
+                        screen = Screen.QUOTE
+                    }
+                )
+                Screen.PARAMETERS -> ParametersScreen(
+                    p = params,
+                    showHelp = showHelp,
+                    profile = businessProfile,
+                    onProfileSaved = { businessProfile = it },
+                    onOpenLicense = { showLicense = true },
+                    onSave = vm::saveParameters
+                )
             }
         }
     }
