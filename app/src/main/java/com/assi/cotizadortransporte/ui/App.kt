@@ -32,12 +32,18 @@ import java.util.Date
 import java.util.Locale
 
 private enum class Screen(val label: String) {
-    QUOTE("Cotizar"), VEHICLES("Vehículos"), PARAMETERS("Parámetros"), HISTORY("Historial"), LICENSE("Licencia")
+    QUOTE("Cotizar"), VEHICLES("Flota"), PARAMETERS("Ajustes"), HISTORY("Historial"), LICENSE("Licencia")
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun TransportCostApp(vm: AppViewModel, darkMode: Boolean, onDarkModeChange: (Boolean) -> Unit) {
+fun TransportCostApp(
+    vm: AppViewModel,
+    darkMode: Boolean,
+    onDarkModeChange: (Boolean) -> Unit,
+    showHelp: Boolean,
+    onShowHelpChange: (Boolean) -> Unit
+) {
     val context = LocalContext.current
     val vehicles by vm.vehicles.collectAsStateWithLifecycle()
     val params by vm.parameters.collectAsStateWithLifecycle()
@@ -45,7 +51,12 @@ fun TransportCostApp(vm: AppViewModel, darkMode: Boolean, onDarkModeChange: (Boo
     val message by vm.message.collectAsStateWithLifecycle()
     var screen by rememberSaveable { mutableStateOf(Screen.QUOTE) }
     var licenseStatus by remember { mutableStateOf(LicenseManager.currentStatus(context)) }
+    var showAbout by rememberSaveable { mutableStateOf(false) }
     val snackbarHost = remember { SnackbarHostState() }
+
+    if (showAbout) {
+        AboutDialog(onDismiss = { showAbout = false })
+    }
 
     val licensedForUse = licenseStatus.valid || BuildConfig.DEBUG
     if (!licensedForUse) {
@@ -68,14 +79,22 @@ fun TransportCostApp(vm: AppViewModel, darkMode: Boolean, onDarkModeChange: (Boo
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("ASSI · Cotizador") },
+                title = {
+                    Column {
+                        Text("CotiRuta", fontWeight = FontWeight.Bold)
+                        Text("Costos y tarifas de transporte", style = MaterialTheme.typography.labelSmall)
+                    }
+                },
                 actions = {
-                    Text("Oscuro", style = MaterialTheme.typography.labelMedium)
-                    Switch(
-                        checked = darkMode,
-                        onCheckedChange = onDarkModeChange,
-                        modifier = Modifier.padding(horizontal = 8.dp)
-                    )
+                    IconButton(onClick = { onShowHelpChange(!showHelp) }) {
+                        Text(if (showHelp) "?✓" else "?", fontWeight = FontWeight.Bold)
+                    }
+                    IconButton(onClick = { onDarkModeChange(!darkMode) }) {
+                        Text(if (darkMode) "☾" else "☀")
+                    }
+                    IconButton(onClick = { showAbout = true }) {
+                        Text("ⓘ")
+                    }
                 }
             )
         },
@@ -95,10 +114,10 @@ fun TransportCostApp(vm: AppViewModel, darkMode: Boolean, onDarkModeChange: (Boo
     ) { padding ->
         Box(Modifier.padding(padding).fillMaxSize()) {
             when (screen) {
-                Screen.QUOTE -> QuoteScreen(vehicles, params, vm::saveQuote)
-                Screen.VEHICLES -> VehiclesScreen(vehicles, vm::importVehicles, vm::saveVehicle)
-                Screen.PARAMETERS -> ParametersScreen(params, vm::saveParameters)
-                Screen.HISTORY -> HistoryScreen(quotes)
+                Screen.QUOTE -> QuoteScreen(vehicles, params, showHelp, vm::saveQuote)
+                Screen.VEHICLES -> VehiclesScreen(vehicles, showHelp, vm::importVehicles, vm::saveVehicle)
+                Screen.PARAMETERS -> ParametersScreen(params, showHelp, vm::saveParameters)
+                Screen.HISTORY -> HistoryScreen(quotes, showHelp)
                 Screen.LICENSE -> LicenseScreen(licenseStatus, { licenseStatus = it }, darkMode, onDarkModeChange)
             }
         }
@@ -109,6 +128,7 @@ fun TransportCostApp(vm: AppViewModel, darkMode: Boolean, onDarkModeChange: (Boo
 private fun QuoteScreen(
     vehicles: List<VehicleEntity>,
     params: CostParametersEntity,
+    showHelp: Boolean,
     onSave: (QuoteEntity) -> Unit
 ) {
     val context = LocalContext.current
@@ -122,6 +142,8 @@ private fun QuoteScreen(
     var drivers by rememberSaveable { mutableStateOf("1") }
     var salary by rememberSaveable { mutableStateOf("") }
     var diet by rememberSaveable { mutableStateOf("") }
+    var outputCurrency by rememberSaveable { mutableStateOf("USD") }
+    var outputRate by rememberSaveable { mutableStateOf("1") }
     var marginOverride by rememberSaveable { mutableStateOf("") }
     var selectedId by rememberSaveable { mutableStateOf("") }
     var result by remember { mutableStateOf<QuoteCalculator.Result?>(null) }
@@ -144,6 +166,17 @@ private fun QuoteScreen(
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         Text("Nueva oferta", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+        if (showHelp) {
+            HelpCard(
+                "Cómo cotizar",
+                "Complete la ruta, seleccione el vehículo y defina distancia, tiempo y personal. CotiRuta calcula costos, margen y tarifa final automáticamente."
+            )
+        }
+        Text(
+            "Salida: ${params.outputCurrency.uppercase(Locale.US)} · 1 USD = ${format2(params.outputExchangeRatePerUsd)} ${params.outputCurrency.uppercase(Locale.US)}",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.secondary
+        )
         if (vehicles.isEmpty()) {
             ElevatedCard { Text("Primero cree un vehículo o importe el catálogo desde XLSX o CSV.", Modifier.padding(16.dp)) }
             return@Column
@@ -198,8 +231,8 @@ private fun QuoteScreen(
         error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
 
         result?.let { r ->
-            CostBreakdown(r)
-            ClientSummary(service, origin, destination, if (roundTrip) "Redondo" else "Sencillo", distance, selected!!.name, days.toIntOrNull() ?: 0, r)
+            CostBreakdown(r, params)
+            ClientSummary(service, origin, destination, if (roundTrip) "Redondo" else "Sencillo", distance, selected!!.name, days.toIntOrNull() ?: 0, r, params)
 
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(
@@ -222,7 +255,9 @@ private fun QuoteScreen(
                                 commercialMarginPct = r.marginPct,
                                 calculatedPriceUsd = r.calculatedPriceUsd,
                                 offerPriceUsd = r.offerPriceUsd,
-                                offerPricePerKmUsd = r.offerPricePerKmUsd
+                                offerPricePerKmUsd = r.offerPricePerKmUsd,
+                                currencyCode = params.outputCurrency.uppercase(Locale.US),
+                                currencyRatePerUsd = safeRate(params.outputExchangeRatePerUsd)
                             )
                         )
                     },
@@ -230,13 +265,13 @@ private fun QuoteScreen(
                 ) { Text("Guardar") }
                 OutlinedButton(
                     onClick = {
-                        QuoteShareUtil.shareImage(context, presentation(client, service, origin, destination, roundTrip, distance, selected, days, r))
+                        QuoteShareUtil.shareImage(context, presentation(client, service, origin, destination, roundTrip, distance, selected, days, r, params))
                     },
                     modifier = Modifier.weight(1f)
                 ) { Text("Imagen") }
                 OutlinedButton(
                     onClick = {
-                        QuoteShareUtil.sharePdf(context, presentation(client, service, origin, destination, roundTrip, distance, selected, days, r))
+                        QuoteShareUtil.sharePdf(context, presentation(client, service, origin, destination, roundTrip, distance, selected, days, r, params))
                     },
                     modifier = Modifier.weight(1f)
                 ) { Text("PDF") }
@@ -249,7 +284,7 @@ private fun QuoteScreen(
 private fun presentation(
     client: String, service: String, origin: String, destination: String,
     roundTrip: Boolean, distance: Double, vehicle: VehicleEntity, days: String,
-    r: QuoteCalculator.Result
+    r: QuoteCalculator.Result, params: CostParametersEntity
 ) = QuoteShareUtil.Presentation(
     client = client,
     service = service,
@@ -260,7 +295,9 @@ private fun presentation(
     vehicle = vehicle.name,
     days = days.toIntOrNull() ?: 0,
     offerPriceUsd = r.offerPriceUsd,
-    pricePerKmUsd = r.offerPricePerKmUsd
+    pricePerKmUsd = r.offerPricePerKmUsd,
+    currencyCode = params.outputCurrency.uppercase(Locale.US),
+    currencyRatePerUsd = safeRate(params.outputExchangeRatePerUsd)
 )
 
 @Composable
@@ -284,37 +321,52 @@ private fun VehiclePicker(vehicles: List<VehicleEntity>, selectedId: String, onS
 }
 
 @Composable
-private fun CostBreakdown(r: QuoteCalculator.Result) {
+private fun CostBreakdown(r: QuoteCalculator.Result, p: CostParametersEntity) {
     ElevatedCard(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Text("Detalle de costo", fontWeight = FontWeight.Bold)
-            CostRow("Combustible", r.fuelUsd)
-            CostRow("Salarios", r.salariesUsd)
-            CostRow("Dietas", r.dietsUsd)
-            CostRow("Depreciación", r.depreciationUsd)
-            CostRow("Mantenimiento", r.maintenanceUsd)
-            CostRow("Lubricantes y grasas", r.lubricantsUsd)
-            CostRow("Administración / indirectos", r.adminIndirectUsd)
+            CostRow("Combustible", r.fuelUsd, p)
+            CostRow("Salarios", r.salariesUsd, p)
+            CostRow("Dietas", r.dietsUsd, p)
+            CostRow("Depreciación", r.depreciationUsd, p)
+            CostRow("Mantenimiento", r.maintenanceUsd, p)
+            CostRow("Lubricantes y grasas", r.lubricantsUsd, p)
+            CostRow("Administración / indirectos", r.adminIndirectUsd, p)
             HorizontalDivider()
-            CostRow("Costo total", r.totalCostUsd, true)
-            Text("Margen comercial: ${format1(r.marginPct * 100)}% · ${usd(r.commercialMarkupUsd)}")
-            CostRow("Precio calculado", r.calculatedPriceUsd)
-            Text("PRECIO OFERTA: ${usd(r.offerPriceUsd)}", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
-            Text("Tarifa: ${usd(r.offerPricePerKmUsd)} / km")
+            CostRow("Costo total", r.totalCostUsd, p, true)
+            Text("Margen comercial: ${format1(r.marginPct * 100)}% · ${outputMoney(r.commercialMarkupUsd, p)}")
+            CostRow("Precio calculado", r.calculatedPriceUsd, p)
+            Text(
+                "PRECIO OFERTA: ${outputMoney(r.offerPriceUsd, p)}",
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.primary
+            )
+            Text("Tarifa: ${outputMoney(r.offerPricePerKmUsd, p)} / km")
         }
     }
 }
 
 @Composable
-private fun CostRow(label: String, value: Double, bold: Boolean = false) {
+private fun CostRow(label: String, valueUsd: Double, p: CostParametersEntity, bold: Boolean = false) {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
         Text(label, fontWeight = if (bold) FontWeight.Bold else FontWeight.Normal)
-        Text(usd(value), fontWeight = if (bold) FontWeight.Bold else FontWeight.Normal)
+        Text(outputMoney(valueUsd, p), fontWeight = if (bold) FontWeight.Bold else FontWeight.Normal)
     }
 }
 
 @Composable
-private fun ClientSummary(service: String, origin: String, destination: String, type: String, km: Double, vehicle: String, days: Int, r: QuoteCalculator.Result) {
+private fun ClientSummary(
+    service: String,
+    origin: String,
+    destination: String,
+    type: String,
+    km: Double,
+    vehicle: String,
+    days: Int,
+    r: QuoteCalculator.Result,
+    p: CostParametersEntity
+) {
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
             Text("RESUMEN PARA CLIENTE", fontWeight = FontWeight.Bold)
@@ -326,7 +378,11 @@ private fun ClientSummary(service: String, origin: String, destination: String, 
             Text("Equipo: $vehicle")
             Text("Tiempo estimado: $days día(s)")
             HorizontalDivider()
-            Text("PRECIO OFERTA ${usd(r.offerPriceUsd)}", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+            Text(
+                "PRECIO OFERTA ${outputMoney(r.offerPriceUsd, p)}",
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold
+            )
         }
     }
 }
@@ -334,6 +390,7 @@ private fun ClientSummary(service: String, origin: String, destination: String, 
 @Composable
 private fun VehiclesScreen(
     vehicles: List<VehicleEntity>,
+    showHelp: Boolean,
     onImport: (Uri, Boolean) -> Unit,
     onSaveVehicle: (VehicleEntity) -> Unit
 ) {
@@ -355,7 +412,13 @@ private fun VehiclesScreen(
     }
 
     Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text("Vehículos", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+        Text("Flota", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+        if (showHelp) {
+            HelpCard(
+                "Catálogo de flota",
+                "Cree cada vehículo manualmente o importe el catálogo desde Excel/CSV. El valor total AFT se calcula con vehículo + equipo/remolque."
+            )
+        }
         Text("Puede crear vehículos manualmente o importar la hoja Vehiculos del Excel / CSV.")
 
         Button(
@@ -704,7 +767,11 @@ private fun LicenseScreen(
 }
 
 @Composable
-private fun ParametersScreen(p: CostParametersEntity, onSave: (CostParametersEntity) -> Unit) {
+private fun ParametersScreen(
+    p: CostParametersEntity,
+    showHelp: Boolean,
+    onSave: (CostParametersEntity) -> Unit
+) {
     var margin by rememberSaveable { mutableStateOf("") }
     var dep by rememberSaveable { mutableStateOf("") }
     var maint by rememberSaveable { mutableStateOf("") }
@@ -727,10 +794,22 @@ private fun ParametersScreen(p: CostParametersEntity, onSave: (CostParametersEnt
         rounding = fmtInput(p.offerRoundingUsd)
         salary = fmtInput(p.standardDailySalaryUsd)
         diet = fmtInput(p.standardDailyDietUsd)
+        outputCurrency = p.outputCurrency
+        outputRate = fmtInput(p.outputExchangeRatePerUsd)
     }
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Text("Parámetros generales", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+        Text("Ajustes", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+        if (showHelp) {
+            HelpCard(
+                "Moneda y parámetros",
+                "Los costos internos se mantienen en USD para conservar una base consistente. La moneda de salida convierte resultados, historial nuevo, PDF e imagen usando la tasa que defina."
+            )
+        }
+        Text("Moneda de salida", fontWeight = FontWeight.SemiBold)
+        Field("Código de moneda (USD, CUP, EUR, BRL...)", outputCurrency) { outputCurrency = it.uppercase(Locale.US).take(5) }
+        NumberField("Tasa: unidades de salida por 1 USD", outputRate) { outputRate = it }
+        HorizontalDivider()
         NumberField("Margen comercial %", margin) { margin = it }
         NumberField("Depreciación anual %", dep) { dep = it }
         NumberField("Mantenimiento anual %", maint) { maint = it }
@@ -754,7 +833,9 @@ private fun ParametersScreen(p: CostParametersEntity, onSave: (CostParametersEnt
                         annualReferenceKm = parseNumber(annualKm) ?: 0.0,
                         offerRoundingUsd = parseNumber(rounding) ?: 0.0,
                         standardDailySalaryUsd = parseNumber(salary) ?: 0.0,
-                        standardDailyDietUsd = parseNumber(diet) ?: 0.0
+                        standardDailyDietUsd = parseNumber(diet) ?: 0.0,
+                        outputCurrency = outputCurrency.trim().uppercase(Locale.US).ifBlank { "USD" },
+                        outputExchangeRatePerUsd = safeRate(parseNumber(outputRate) ?: 1.0)
                     )
                 )
             },
@@ -765,24 +846,74 @@ private fun ParametersScreen(p: CostParametersEntity, onSave: (CostParametersEnt
 }
 
 @Composable
-private fun HistoryScreen(items: List<QuoteEntity>) {
+private fun HistoryScreen(items: List<QuoteEntity>, showHelp: Boolean) {
     Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Text("Historial", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+        if (showHelp) {
+            HelpCard(
+                "Historial",
+                "Cada cotización conserva la moneda y tasa de salida utilizadas al guardarla, aunque después cambie los parámetros generales."
+            )
+        }
         if (items.isEmpty()) Text("No hay cotizaciones guardadas.")
-        Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Column(
+            Modifier.weight(1f).verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
             items.forEach { q ->
                 ElevatedCard(Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(12.dp)) {
                         Text(q.service, fontWeight = FontWeight.Bold)
                         Text("${q.origin.ifBlank { "—" }} → ${q.destination.ifBlank { "—" }} · ${q.tripType}")
                         Text("${format2(q.totalDistanceKm)} km · ${q.vehicleName}")
-                        Text("${usd(q.offerPriceUsd)}", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.primary)
-                        Text(SimpleDateFormat("dd/MM/yyyy HH:mm", Locale.getDefault()).format(Date(q.createdAt)), style = MaterialTheme.typography.bodySmall)
+                        Text(
+                            money(q.offerPriceUsd, q.currencyCode, q.currencyRatePerUsd),
+                            style = MaterialTheme.typography.titleLarge,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Text(
+                            SimpleDateFormat("dd/MM/yyyy HH:mm", Locale.getDefault()).format(Date(q.createdAt)),
+                            style = MaterialTheme.typography.bodySmall
+                        )
                     }
                 }
             }
         }
     }
+}
+
+@Composable
+private fun HelpCard(title: String, body: String) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
+    ) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(title, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onPrimaryContainer)
+            Text(body, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onPrimaryContainer)
+        }
+    }
+}
+
+@Composable
+private fun AboutDialog(onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("CotiRuta") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Costos y tarifas de transporte", fontWeight = FontWeight.SemiBold)
+                Text("Versión ${BuildConfig.VERSION_NAME}")
+                HorizontalDivider()
+                Text("Desarrollado por ASSI SURL")
+                Text("Herramienta móvil para estimar costos operativos, definir tarifas comerciales y generar cotizaciones profesionales de transporte.")
+                Text("Licencia individual por teléfono/dispositivo. Solicitudes: ${LicenseManager.LICENSE_REQUEST_EMAIL}")
+            }
+        },
+        confirmButton = {
+            Button(onClick = onDismiss) { Text("Cerrar") }
+        }
+    )
 }
 
 @Composable
@@ -800,3 +931,10 @@ private fun fmtInput(v: Double): String = if (v % 1.0 == 0.0) v.toLong().toStrin
 private fun format1(v: Double): String = String.format(Locale.US, "%.1f", v)
 private fun format2(v: Double): String = String.format(Locale.US, "%.2f", v)
 private fun usd(v: Double): String = NumberFormat.getCurrencyInstance(Locale.US).format(v)
+private fun safeRate(v: Double): Double = if (v > 0.0) v else 1.0
+private fun money(valueUsd: Double, code: String, rate: Double): String {
+    val normalized = code.trim().uppercase(Locale.US).ifBlank { "USD" }
+    return String.format(Locale.US, "%s %,.2f", normalized, valueUsd * safeRate(rate))
+}
+private fun outputMoney(valueUsd: Double, p: CostParametersEntity): String =
+    money(valueUsd, p.outputCurrency, p.outputExchangeRatePerUsd)
