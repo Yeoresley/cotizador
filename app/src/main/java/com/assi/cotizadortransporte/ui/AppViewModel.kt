@@ -8,6 +8,7 @@ import com.assi.cotizadortransporte.data.AppDatabase
 import com.assi.cotizadortransporte.data.AppRepository
 import com.assi.cotizadortransporte.data.CostParametersEntity
 import com.assi.cotizadortransporte.data.QuoteEntity
+import com.assi.cotizadortransporte.data.VehicleEntity
 import com.assi.cotizadortransporte.importer.VehicleImportParser
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -35,6 +36,13 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             repo.saveParameters(item)
             _message.value = "Parámetros guardados."
+        }
+    }
+
+    fun saveVehicle(item: VehicleEntity) {
+        viewModelScope.launch {
+            repo.saveVehicle(item)
+            _message.value = "Vehículo guardado."
         }
     }
 
