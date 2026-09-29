@@ -69,7 +69,7 @@ object LicenseManager {
     fun requestSummary(context: Context, customer: String, phone: String, email: String): String {
         val code = buildRequestCode(context, customer, phone, email)
         return buildString {
-            appendLine("SOLICITUD DE LICENCIA · ASSI Cotizador Transporte")
+            appendLine("SOLICITUD DE LICENCIA · CotiRuta")
             appendLine()
             appendLine("Cliente: ${customer.trim()}")
             appendLine("Teléfono: ${phone.trim()}")
