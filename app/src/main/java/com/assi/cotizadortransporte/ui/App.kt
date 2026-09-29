@@ -600,11 +600,13 @@ private fun ClientSummary(
 private fun VehiclesScreen(
     vehicles: List<VehicleEntity>,
     showHelp: Boolean,
+    demoMode: Boolean,
     onImport: (Uri, Boolean) -> Unit,
     onSaveVehicle: (VehicleEntity) -> Unit
 ) {
     var replace by remember { mutableStateOf(false) }
     var showNewVehicle by rememberSaveable { mutableStateOf(false) }
+    val demoLimitReached = demoMode && vehicles.size >= DemoManager.MAX_VEHICLES
     val launcher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         uri?.let { onImport(it, replace) }
     }
@@ -621,20 +623,29 @@ private fun VehiclesScreen(
     }
 
     Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text("Flota", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("Flota", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+            if (demoMode) {
+                Spacer(Modifier.width(8.dp))
+                AssistChip(onClick = {}, label = { Text("${vehicles.size}/${DemoManager.MAX_VEHICLES} Demo") })
+            }
+        }
         if (showHelp) {
             HelpCard(
                 "Catálogo de flota",
-                "Cree cada vehículo manualmente o importe el catálogo desde Excel/CSV. El valor total AFT se calcula con vehículo + equipo/remolque."
+                if (demoMode)
+                    "En Demo puede trabajar con hasta ${DemoManager.MAX_VEHICLES} vehículos. Cree equipos manualmente o importe desde Excel/CSV."
+                else
+                    "Cree cada vehículo manualmente o importe el catálogo desde Excel/CSV. El valor total AFT se calcula con vehículo + equipo/remolque."
             )
         }
-        Text("Puede crear vehículos manualmente o importar la hoja Vehiculos del Excel / CSV.")
 
         Button(
             onClick = { showNewVehicle = true },
+            enabled = !demoLimitReached,
             modifier = Modifier.fillMaxWidth()
         ) {
-            Text("NUEVO VEHÍCULO")
+            Text(if (demoLimitReached) "LÍMITE DEMO ALCANZADO" else "NUEVO VEHÍCULO")
         }
 
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -786,7 +797,8 @@ private fun LicenseScreen(
     status: LicenseManager.Status,
     onStatusChanged: (LicenseManager.Status) -> Unit,
     darkMode: Boolean,
-    onDarkModeChange: (Boolean) -> Unit
+    onDarkModeChange: (Boolean) -> Unit,
+    onBack: () -> Unit
 ) {
     val context = LocalContext.current
     var customer by rememberSaveable { mutableStateOf("") }
@@ -816,14 +828,15 @@ private fun LicenseScreen(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
+        TextButton(onClick = onBack) { Text("← Volver") }
         Text("Licencia", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
 
         ElevatedCard(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text(
-                    if (status.valid) "LICENCIA ACTIVA" else "SIN LICENCIA",
+                    if (status.valid) "LICENCIA ACTIVA" else "MODO DEMO",
                     fontWeight = FontWeight.Bold,
-                    color = if (status.valid) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
+                    color = if (status.valid) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondary
                 )
                 Text("Dispositivo: ${LicenseManager.deviceId(context)}")
                 if (status.valid) {
@@ -832,13 +845,12 @@ private fun LicenseScreen(
                     if (status.licenseId.isNotBlank()) Text("Licencia: ${status.licenseId}")
                     Text("Actualizaciones: " + if (status.updatesUntilEpochSec == 0L) "sin límite configurado" else "según vigencia de licencia")
                 } else {
-                    Text(status.message)
-                }
-                if (BuildConfig.DEBUG) {
+                    val demo = DemoManager.status(context)
                     Text(
-                        "Modo de prueba: esta APK debug permite usar la app sin licencia. La versión comercial release quedará bloqueada hasta activarse.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.secondary
+                        if (demo.exhausted)
+                            "La demostración ha finalizado."
+                        else
+                            "Puede probar CotiRuta sin pagar: ${demo.remainingCalculations} cotizaciones Demo disponibles."
                     )
                 }
             }
@@ -852,7 +864,11 @@ private fun LicenseScreen(
 
         if (!status.valid) {
             HorizontalDivider()
-            Text("1. Solicitar licencia", fontWeight = FontWeight.Bold)
+            Text("Solicitar licencia", fontWeight = FontWeight.Bold)
+            Text(
+                "Cuando decida activar la versión completa, genere la solicitud. La licencia se vincula al número de teléfono y al dispositivo.",
+                style = MaterialTheme.typography.bodySmall
+            )
             Field("Nombre / empresa", customer) { customer = it }
             Field("Teléfono", phone) { phone = it }
             Field("Correo del cliente", email) { email = it }
@@ -895,37 +911,21 @@ private fun LicenseScreen(
                     Button(
                         onClick = {
                             val body = LicenseManager.requestSummary(context, customer, phone, email)
-                            if (LicenseManager.LICENSE_REQUEST_EMAIL.isNotBlank()) {
-                                val intent = Intent(Intent.ACTION_SENDTO).apply {
-                                    data = Uri.parse("mailto:${LicenseManager.LICENSE_REQUEST_EMAIL}")
-                                    putExtra(Intent.EXTRA_SUBJECT, "Solicitud licencia CotiRuta · ${LicenseManager.deviceId(context)}")
-                                    putExtra(Intent.EXTRA_TEXT, body)
-                                }
-                                runCatching { context.startActivity(intent) }
-                                    .onFailure { localMessage = "No hay una aplicación de correo disponible." }
-                            } else {
-                                val intent = Intent(Intent.ACTION_SEND).apply {
-                                    type = "text/plain"
-                                    putExtra(Intent.EXTRA_SUBJECT, "Solicitud licencia CotiRuta")
-                                    putExtra(Intent.EXTRA_TEXT, body)
-                                }
-                                context.startActivity(Intent.createChooser(intent, "Enviar solicitud"))
+                            val intent = Intent(Intent.ACTION_SENDTO).apply {
+                                data = Uri.parse("mailto:${LicenseManager.LICENSE_REQUEST_EMAIL}")
+                                putExtra(Intent.EXTRA_SUBJECT, "Solicitud licencia CotiRuta · ${LicenseManager.deviceId(context)}")
+                                putExtra(Intent.EXTRA_TEXT, body)
                             }
+                            runCatching { context.startActivity(intent) }
+                                .onFailure { localMessage = "No hay una aplicación de correo disponible." }
                         },
                         modifier = Modifier.weight(1f)
                     ) { Text("Enviar") }
                 }
-
-                if (LicenseManager.LICENSE_REQUEST_EMAIL.isBlank()) {
-                    Text(
-                        "El correo fijo de licencias aún no está configurado; por ahora se abre el menú Compartir para que el usuario elija cómo enviarla.",
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                }
             }
 
             HorizontalDivider()
-            Text("2. Activar licencia pagada", fontWeight = FontWeight.Bold)
+            Text("Activar licencia pagada", fontWeight = FontWeight.Bold)
 
             OutlinedButton(
                 onClick = {
@@ -955,17 +955,6 @@ private fun LicenseScreen(
             ) {
                 Text("ACTIVAR")
             }
-        } else {
-            OutlinedButton(
-                onClick = {
-                    LicenseManager.clear(context)
-                    onStatusChanged(LicenseManager.currentStatus(context))
-                    localMessage = "Licencia retirada de este dispositivo."
-                },
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text("RETIRAR LICENCIA")
-            }
         }
 
         if (localMessage.isNotBlank()) {
@@ -979,8 +968,12 @@ private fun LicenseScreen(
 private fun ParametersScreen(
     p: CostParametersEntity,
     showHelp: Boolean,
+    profile: BusinessProfileManager.Profile,
+    onProfileSaved: (BusinessProfileManager.Profile) -> Unit,
+    onOpenLicense: () -> Unit,
     onSave: (CostParametersEntity) -> Unit
 ) {
+    val context = LocalContext.current
     var margin by rememberSaveable { mutableStateOf("") }
     var dep by rememberSaveable { mutableStateOf("") }
     var maint by rememberSaveable { mutableStateOf("") }
@@ -993,6 +986,18 @@ private fun ParametersScreen(
     var diet by rememberSaveable { mutableStateOf("") }
     var outputCurrency by rememberSaveable { mutableStateOf("USD") }
     var outputRate by rememberSaveable { mutableStateOf("1") }
+    var entityName by rememberSaveable { mutableStateOf(profile.name) }
+    var entityContact by rememberSaveable { mutableStateOf(profile.contact) }
+    var logoUri by rememberSaveable { mutableStateOf(profile.logoUri) }
+
+    val logoPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) {
+            runCatching {
+                context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            logoUri = uri.toString()
+        }
+    }
 
     LaunchedEffect(p) {
         margin = fmtInput(p.commercialMarginPct * 100)
@@ -1009,18 +1014,54 @@ private fun ParametersScreen(
         outputRate = fmtInput(p.outputExchangeRatePerUsd)
     }
 
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+    Column(
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
         Text("Ajustes", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
         if (showHelp) {
             HelpCard(
-                "Moneda y parámetros",
-                "Los costos internos se mantienen en USD para conservar una base consistente. La moneda de salida convierte resultados, historial nuevo, PDF e imagen usando la tasa que defina."
+                "Configure CotiRuta",
+                "Defina moneda, costos y los datos que aparecerán en PDF e imagen. Los cálculos internos se mantienen en USD y la salida se convierte con su tasa."
             )
         }
-        Text("Moneda de salida", fontWeight = FontWeight.SemiBold)
-        Field("Código de moneda (USD, CUP, EUR, BRL...)", outputCurrency) { outputCurrency = it.uppercase(Locale.US).take(5) }
-        NumberField("Tasa: unidades de salida por 1 USD", outputRate) { outputRate = it }
+
+        Text("Identidad de la entidad", fontWeight = FontWeight.Bold)
+        Field("Nombre comercial / entidad", entityName) { entityName = it }
+        Field("Contacto / dirección / teléfono", entityContact) { entityContact = it }
+        OutlinedButton(
+            onClick = { logoPicker.launch(arrayOf("image/png", "image/jpeg", "image/webp")) },
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text(if (logoUri.isBlank()) "SELECCIONAR LOGO" else "CAMBIAR LOGO")
+        }
+        if (logoUri.isNotBlank()) {
+            Text("Logo configurado para documentos.", style = MaterialTheme.typography.bodySmall)
+        }
+        Button(
+            onClick = {
+                val updated = BusinessProfileManager.Profile(
+                    name = entityName.trim(),
+                    contact = entityContact.trim(),
+                    logoUri = logoUri
+                )
+                BusinessProfileManager.save(context, updated)
+                onProfileSaved(updated)
+            },
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text("GUARDAR IDENTIDAD")
+        }
+
         HorizontalDivider()
+        Text("Moneda de salida", fontWeight = FontWeight.Bold)
+        Field("Código de moneda (USD, CUP, EUR, BRL...)", outputCurrency) {
+            outputCurrency = it.uppercase(Locale.US).take(5)
+        }
+        NumberField("Tasa: unidades de salida por 1 USD", outputRate) { outputRate = it }
+
+        HorizontalDivider()
+        Text("Parámetros de costo", fontWeight = FontWeight.Bold)
         NumberField("Margen comercial %", margin) { margin = it }
         NumberField("Depreciación anual %", dep) { dep = it }
         NumberField("Mantenimiento anual %", maint) { maint = it }
@@ -1031,6 +1072,7 @@ private fun ParametersScreen(
         NumberField("Redondeo comercial USD", rounding) { rounding = it }
         NumberField("Salario diario estándar USD", salary) { salary = it }
         NumberField("Dieta diaria estándar USD", diet) { diet = it }
+
         Button(
             onClick = {
                 onSave(
@@ -1051,29 +1093,46 @@ private fun ParametersScreen(
                 )
             },
             modifier = Modifier.fillMaxWidth()
-        ) { Text("GUARDAR PARÁMETROS") }
+        ) {
+            Text("GUARDAR PARÁMETROS")
+        }
+
+        HorizontalDivider()
+        OutlinedButton(onClick = onOpenLicense, modifier = Modifier.fillMaxWidth()) {
+            Text("LICENCIA Y ACTIVACIÓN")
+        }
+
         Spacer(Modifier.height(20.dp))
     }
 }
 
 @Composable
-private fun HistoryScreen(items: List<QuoteEntity>, showHelp: Boolean) {
+private fun HistoryScreen(
+    items: List<QuoteEntity>,
+    showHelp: Boolean,
+    demoMode: Boolean,
+    onDuplicate: (QuoteEntity) -> Unit
+) {
     Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Text("Historial", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
         if (showHelp) {
             HelpCard(
                 "Historial",
-                "Cada cotización conserva la moneda y tasa de salida utilizadas al guardarla, aunque después cambie los parámetros generales."
+                if (demoMode)
+                    "En Demo se muestran las ${DemoManager.MAX_HISTORY_VISIBLE} cotizaciones más recientes. Active la licencia para acceder al historial completo."
+                else
+                    "Cada cotización conserva la moneda y tasa utilizadas. Puede duplicarla para preparar rápidamente una nueva oferta."
             )
         }
         if (items.isEmpty()) Text("No hay cotizaciones guardadas.")
+
         Column(
             Modifier.weight(1f).verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             items.forEach { q ->
                 ElevatedCard(Modifier.fillMaxWidth()) {
-                    Column(Modifier.padding(12.dp)) {
+                    Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                         Text(q.service, fontWeight = FontWeight.Bold)
                         Text("${q.origin.ifBlank { "—" }} → ${q.destination.ifBlank { "—" }} · ${q.tripType}")
                         Text("${format2(q.totalDistanceKm)} km · ${q.vehicleName}")
@@ -1086,6 +1145,9 @@ private fun HistoryScreen(items: List<QuoteEntity>, showHelp: Boolean) {
                             SimpleDateFormat("dd/MM/yyyy HH:mm", Locale.getDefault()).format(Date(q.createdAt)),
                             style = MaterialTheme.typography.bodySmall
                         )
+                        TextButton(onClick = { onDuplicate(q) }) {
+                            Text("DUPLICAR COTIZACIÓN")
+                        }
                     }
                 }
             }
