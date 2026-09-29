@@ -10,7 +10,6 @@ import android.graphics.pdf.PdfDocument
 import androidx.core.content.FileProvider
 import java.io.File
 import java.io.FileOutputStream
-import java.text.NumberFormat
 import java.util.Locale
 
 object QuoteShareUtil {
@@ -24,17 +23,17 @@ object QuoteShareUtil {
         val vehicle: String,
         val days: Int,
         val offerPriceUsd: Double,
-        val pricePerKmUsd: Double
+        val pricePerKmUsd: Double,
+        val currencyCode: String,
+        val currencyRatePerUsd: Double
     )
-
-    private val usd = NumberFormat.getCurrencyInstance(Locale.US)
 
     fun shareImage(context: Context, p: Presentation) {
         val bitmap = Bitmap.createBitmap(1200, 1500, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bitmap)
         drawSummary(canvas, p, 1200, 1500)
         val dir = File(context.cacheDir, "shared").apply { mkdirs() }
-        val file = File(dir, "oferta_transporte.png")
+        val file = File(dir, "cotiruta_oferta.png")
         FileOutputStream(file).use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
         shareFile(context, file, "image/png")
     }
@@ -46,7 +45,7 @@ object QuoteShareUtil {
         drawSummary(page.canvas, p, 1200, 1500)
         pdf.finishPage(page)
         val dir = File(context.cacheDir, "shared").apply { mkdirs() }
-        val file = File(dir, "oferta_transporte.pdf")
+        val file = File(dir, "cotiruta_oferta.pdf")
         FileOutputStream(file).use { pdf.writeTo(it) }
         pdf.close()
         shareFile(context, file, "application/pdf")
@@ -54,29 +53,35 @@ object QuoteShareUtil {
 
     private fun drawSummary(canvas: Canvas, p: Presentation, width: Int, height: Int) {
         canvas.drawColor(Color.WHITE)
-        val navy = Color.rgb(23, 54, 93)
-        val green = Color.rgb(112, 173, 71)
+        val navy = Color.rgb(13, 42, 74)
+        val mint = Color.rgb(0, 134, 106)
         val text = Color.rgb(30, 30, 30)
         val muted = Color.rgb(95, 95, 95)
 
-        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { typeface = android.graphics.Typeface.create("sans", android.graphics.Typeface.NORMAL) }
-        paint.color = navy
-        canvas.drawRect(0f, 0f, width.toFloat(), 150f, paint)
-        paint.color = Color.WHITE
-        paint.textSize = 54f
-        paint.typeface = android.graphics.Typeface.DEFAULT_BOLD
-        canvas.drawText("OFERTA DE SERVICIO", 70f, 95f, paint)
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            typeface = android.graphics.Typeface.create("sans", android.graphics.Typeface.NORMAL)
+        }
 
-        var y = 235f
+        paint.color = navy
+        canvas.drawRect(0f, 0f, width.toFloat(), 170f, paint)
+        paint.color = Color.WHITE
+        paint.textSize = 48f
+        paint.typeface = android.graphics.Typeface.DEFAULT_BOLD
+        canvas.drawText("CotiRuta", 70f, 72f, paint)
+        paint.textSize = 28f
+        paint.typeface = android.graphics.Typeface.DEFAULT
+        canvas.drawText("Cotización profesional de transporte", 70f, 120f, paint)
+
+        var y = 240f
         fun line(label: String, value: String) {
             paint.typeface = android.graphics.Typeface.DEFAULT_BOLD
-            paint.textSize = 34f
+            paint.textSize = 32f
             paint.color = muted
             canvas.drawText(label, 70f, y, paint)
             paint.typeface = android.graphics.Typeface.DEFAULT
             paint.color = text
             canvas.drawText(value.take(48), 440f, y, paint)
-            y += 82f
+            y += 80f
         }
 
         if (p.client.isNotBlank()) line("Cliente", p.client)
@@ -89,22 +94,44 @@ object QuoteShareUtil {
         line("Duración", "${p.days} día(s)")
 
         y += 35f
-        paint.color = green
+        paint.color = mint
         canvas.drawRoundRect(70f, y, width - 70f, y + 220f, 28f, 28f, paint)
         paint.color = Color.WHITE
         paint.typeface = android.graphics.Typeface.DEFAULT_BOLD
-        paint.textSize = 40f
-        canvas.drawText("PRECIO OFERTA", 115f, y + 78f, paint)
-        paint.textSize = 68f
-        canvas.drawText(usd.format(p.offerPriceUsd), 115f, y + 165f, paint)
+        paint.textSize = 38f
+        canvas.drawText("PRECIO OFERTA", 115f, y + 76f, paint)
+        paint.textSize = 62f
+        canvas.drawText(money(p.offerPriceUsd, p.currencyCode, p.currencyRatePerUsd), 115f, y + 165f, paint)
         y += 285f
 
         paint.color = muted
         paint.typeface = android.graphics.Typeface.DEFAULT
-        paint.textSize = 30f
-        canvas.drawText("Tarifa referencial: ${usd.format(p.pricePerKmUsd)} / km", 70f, y, paint)
-        paint.textSize = 25f
-        canvas.drawText("Valores expresados en USD. Oferta generada por ASSI Cotizador Transporte.", 70f, height - 70f, paint)
+        paint.textSize = 29f
+        canvas.drawText(
+            "Tarifa referencial: ${money(p.pricePerKmUsd, p.currencyCode, p.currencyRatePerUsd)} / km",
+            70f,
+            y,
+            paint
+        )
+        paint.textSize = 23f
+        canvas.drawText(
+            "Moneda de salida: ${p.currencyCode.uppercase(Locale.US)} · Generado por CotiRuta.",
+            70f,
+            height - 95f,
+            paint
+        )
+        canvas.drawText(
+            "Desarrollado por ASSI SURL.",
+            70f,
+            height - 58f,
+            paint
+        )
+    }
+
+    private fun money(valueUsd: Double, code: String, rate: Double): String {
+        val normalized = code.trim().uppercase(Locale.US).ifBlank { "USD" }
+        val safeRate = if (rate > 0.0) rate else 1.0
+        return String.format(Locale.US, "%s %,.2f", normalized, valueUsd * safeRate)
     }
 
     private fun shareFile(context: Context, file: File, mime: String) {
