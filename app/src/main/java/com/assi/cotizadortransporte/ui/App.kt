@@ -1,5 +1,9 @@
 package com.assi.cotizadortransporte.ui
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.content.Intent
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -15,10 +19,12 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.assi.cotizadortransporte.BuildConfig
 import com.assi.cotizadortransporte.data.CostParametersEntity
 import com.assi.cotizadortransporte.data.QuoteEntity
 import com.assi.cotizadortransporte.data.VehicleEntity
 import com.assi.cotizadortransporte.domain.QuoteCalculator
+import com.assi.cotizadortransporte.license.LicenseManager
 import com.assi.cotizadortransporte.share.QuoteShareUtil
 import java.text.NumberFormat
 import java.text.SimpleDateFormat
@@ -26,18 +32,31 @@ import java.util.Date
 import java.util.Locale
 
 private enum class Screen(val label: String) {
-    QUOTE("Cotizar"), VEHICLES("Vehículos"), PARAMETERS("Parámetros"), HISTORY("Historial")
+    QUOTE("Cotizar"), VEHICLES("Vehículos"), PARAMETERS("Parámetros"), HISTORY("Historial"), LICENSE("Licencia")
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun TransportCostApp(vm: AppViewModel, darkMode: Boolean, onDarkModeChange: (Boolean) -> Unit) {
+    val context = LocalContext.current
     val vehicles by vm.vehicles.collectAsStateWithLifecycle()
     val params by vm.parameters.collectAsStateWithLifecycle()
     val quotes by vm.quotes.collectAsStateWithLifecycle()
     val message by vm.message.collectAsStateWithLifecycle()
     var screen by rememberSaveable { mutableStateOf(Screen.QUOTE) }
+    var licenseStatus by remember { mutableStateOf(LicenseManager.currentStatus(context)) }
     val snackbarHost = remember { SnackbarHostState() }
+
+    val licensedForUse = licenseStatus.valid || BuildConfig.DEBUG
+    if (!licensedForUse) {
+        LicenseScreen(
+            status = licenseStatus,
+            onStatusChanged = { licenseStatus = it },
+            darkMode = darkMode,
+            onDarkModeChange = onDarkModeChange
+        )
+        return
+    }
 
     LaunchedEffect(message) {
         message?.let {
@@ -80,6 +99,7 @@ fun TransportCostApp(vm: AppViewModel, darkMode: Boolean, onDarkModeChange: (Boo
                 Screen.VEHICLES -> VehiclesScreen(vehicles, vm::importVehicles, vm::saveVehicle)
                 Screen.PARAMETERS -> ParametersScreen(params, vm::saveParameters)
                 Screen.HISTORY -> HistoryScreen(quotes)
+                Screen.LICENSE -> LicenseScreen(licenseStatus, { licenseStatus = it }, darkMode, onDarkModeChange)
             }
         }
     }
@@ -487,6 +507,200 @@ private fun VehicleFormDialog(
             TextButton(onClick = onDismiss) { Text("Cancelar") }
         }
     )
+}
+
+@Composable
+private fun LicenseScreen(
+    status: LicenseManager.Status,
+    onStatusChanged: (LicenseManager.Status) -> Unit,
+    darkMode: Boolean,
+    onDarkModeChange: (Boolean) -> Unit
+) {
+    val context = LocalContext.current
+    var customer by rememberSaveable { mutableStateOf("") }
+    var phone by rememberSaveable { mutableStateOf("") }
+    var email by rememberSaveable { mutableStateOf("") }
+    var requestCode by rememberSaveable { mutableStateOf("") }
+    var licenseText by rememberSaveable { mutableStateOf("") }
+    var localMessage by rememberSaveable { mutableStateOf("") }
+
+    val licensePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) {
+            runCatching {
+                context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
+                    ?: error("No se pudo leer el archivo.")
+            }.onSuccess { text ->
+                licenseText = text.trim()
+                val result = LicenseManager.activate(context, licenseText)
+                onStatusChanged(result)
+                localMessage = result.message
+            }.onFailure {
+                localMessage = it.message ?: "No se pudo importar la licencia."
+            }
+        }
+    }
+
+    Column(
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Text("Licencia", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+
+        ElevatedCard(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(
+                    if (status.valid) "LICENCIA ACTIVA" else "SIN LICENCIA",
+                    fontWeight = FontWeight.Bold,
+                    color = if (status.valid) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
+                )
+                Text("Dispositivo: ${LicenseManager.deviceId(context)}")
+                if (status.valid) {
+                    if (status.customer.isNotBlank()) Text("Cliente: ${status.customer}")
+                    if (status.phone.isNotBlank()) Text("Teléfono: ${status.phone}")
+                    if (status.licenseId.isNotBlank()) Text("Licencia: ${status.licenseId}")
+                    Text("Actualizaciones: " + if (status.updatesUntilEpochSec == 0L) "sin límite configurado" else "según vigencia de licencia")
+                } else {
+                    Text(status.message)
+                }
+                if (BuildConfig.DEBUG) {
+                    Text(
+                        "Modo de prueba: esta APK debug permite usar la app sin licencia. La versión comercial release quedará bloqueada hasta activarse.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.secondary
+                    )
+                }
+            }
+        }
+
+        Text("Apariencia", fontWeight = FontWeight.SemiBold)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(if (darkMode) "Modo oscuro" else "Modo claro", modifier = Modifier.weight(1f))
+            Switch(checked = darkMode, onCheckedChange = onDarkModeChange)
+        }
+
+        if (!status.valid) {
+            HorizontalDivider()
+            Text("1. Solicitar licencia", fontWeight = FontWeight.Bold)
+            Field("Nombre / empresa", customer) { customer = it }
+            Field("Teléfono", phone) { phone = it }
+            Field("Correo del cliente", email) { email = it }
+
+            Button(
+                onClick = {
+                    if (customer.isBlank() || phone.isBlank()) {
+                        localMessage = "Nombre/empresa y teléfono son obligatorios."
+                    } else {
+                        requestCode = LicenseManager.buildRequestCode(context, customer, phone, email)
+                        localMessage = "Solicitud generada."
+                    }
+                },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("GENERAR SOLICITUD")
+            }
+
+            if (requestCode.isNotBlank()) {
+                OutlinedTextField(
+                    value = requestCode,
+                    onValueChange = {},
+                    readOnly = true,
+                    label = { Text("Código de solicitud") },
+                    modifier = Modifier.fillMaxWidth(),
+                    minLines = 4,
+                    maxLines = 7
+                )
+
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(
+                        onClick = {
+                            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                            clipboard.setPrimaryClip(ClipData.newPlainText("Solicitud licencia ASSI", requestCode))
+                            localMessage = "Código copiado."
+                        },
+                        modifier = Modifier.weight(1f)
+                    ) { Text("Copiar") }
+
+                    Button(
+                        onClick = {
+                            val body = LicenseManager.requestSummary(context, customer, phone, email)
+                            if (LicenseManager.LICENSE_REQUEST_EMAIL.isNotBlank()) {
+                                val intent = Intent(Intent.ACTION_SENDTO).apply {
+                                    data = Uri.parse("mailto:${LicenseManager.LICENSE_REQUEST_EMAIL}")
+                                    putExtra(Intent.EXTRA_SUBJECT, "Solicitud licencia ASSI · ${LicenseManager.deviceId(context)}")
+                                    putExtra(Intent.EXTRA_TEXT, body)
+                                }
+                                runCatching { context.startActivity(intent) }
+                                    .onFailure { localMessage = "No hay una aplicación de correo disponible." }
+                            } else {
+                                val intent = Intent(Intent.ACTION_SEND).apply {
+                                    type = "text/plain"
+                                    putExtra(Intent.EXTRA_SUBJECT, "Solicitud licencia ASSI")
+                                    putExtra(Intent.EXTRA_TEXT, body)
+                                }
+                                context.startActivity(Intent.createChooser(intent, "Enviar solicitud"))
+                            }
+                        },
+                        modifier = Modifier.weight(1f)
+                    ) { Text("Enviar") }
+                }
+
+                if (LicenseManager.LICENSE_REQUEST_EMAIL.isBlank()) {
+                    Text(
+                        "El correo fijo de licencias aún no está configurado; por ahora se abre el menú Compartir para que el usuario elija cómo enviarla.",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+            }
+
+            HorizontalDivider()
+            Text("2. Activar licencia pagada", fontWeight = FontWeight.Bold)
+
+            OutlinedButton(
+                onClick = {
+                    licensePicker.launch(arrayOf("application/json", "text/plain", "application/octet-stream"))
+                },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("IMPORTAR ARCHIVO DE LICENCIA")
+            }
+
+            OutlinedTextField(
+                value = licenseText,
+                onValueChange = { licenseText = it },
+                label = { Text("O pegar licencia") },
+                modifier = Modifier.fillMaxWidth(),
+                minLines = 4,
+                maxLines = 8
+            )
+            Button(
+                onClick = {
+                    val result = LicenseManager.activate(context, licenseText)
+                    onStatusChanged(result)
+                    localMessage = result.message
+                },
+                enabled = licenseText.isNotBlank(),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("ACTIVAR")
+            }
+        } else {
+            OutlinedButton(
+                onClick = {
+                    LicenseManager.clear(context)
+                    onStatusChanged(LicenseManager.currentStatus(context))
+                    localMessage = "Licencia retirada de este dispositivo."
+                },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("RETIRAR LICENCIA")
+            }
+        }
+
+        if (localMessage.isNotBlank()) {
+            Text(localMessage, color = MaterialTheme.colorScheme.primary)
+        }
+        Spacer(Modifier.height(24.dp))
+    }
 }
 
 @Composable
