@@ -12,6 +12,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.graphics.Color
 import com.assi.cotizadortransporte.ui.AppViewModel
 import com.assi.cotizadortransporte.ui.TransportCostApp
 
@@ -22,13 +23,38 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         setContent {
             val systemDark = isSystemInDarkTheme()
-            val prefs = remember { getSharedPreferences("assi_cotizador_prefs", MODE_PRIVATE) }
+            val prefs = remember { getSharedPreferences("cotiruta_prefs", MODE_PRIVATE) }
             var darkMode by remember {
                 mutableStateOf(prefs.getBoolean("dark_mode", systemDark))
             }
+            var showHelp by remember {
+                mutableStateOf(prefs.getBoolean("show_help", true))
+            }
+
+            val lightColors = lightColorScheme(
+                primary = Color(0xFF0D2A4A),
+                onPrimary = Color.White,
+                primaryContainer = Color(0xFFD7E7F7),
+                onPrimaryContainer = Color(0xFF071B30),
+                secondary = Color(0xFF00866A),
+                onSecondary = Color.White,
+                secondaryContainer = Color(0xFFC3F1E3),
+                surface = Color(0xFFF8FAFC),
+                surfaceVariant = Color(0xFFE8EEF4)
+            )
+            val darkColors = darkColorScheme(
+                primary = Color(0xFFA8C8E8),
+                onPrimary = Color(0xFF0A243F),
+                primaryContainer = Color(0xFF143B62),
+                secondary = Color(0xFF63D9B8),
+                onSecondary = Color(0xFF00382A),
+                secondaryContainer = Color(0xFF00513F),
+                surface = Color(0xFF101820),
+                surfaceVariant = Color(0xFF26313C)
+            )
 
             MaterialTheme(
-                colorScheme = if (darkMode) darkColorScheme() else lightColorScheme()
+                colorScheme = if (darkMode) darkColors else lightColors
             ) {
                 TransportCostApp(
                     vm = vm,
@@ -36,6 +62,11 @@ class MainActivity : ComponentActivity() {
                     onDarkModeChange = { enabled ->
                         darkMode = enabled
                         prefs.edit().putBoolean("dark_mode", enabled).apply()
+                    },
+                    showHelp = showHelp,
+                    onShowHelpChange = { enabled ->
+                        showHelp = enabled
+                        prefs.edit().putBoolean("show_help", enabled).apply()
                     }
                 )
             }
