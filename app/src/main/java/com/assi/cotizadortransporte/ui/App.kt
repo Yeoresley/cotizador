@@ -137,7 +137,7 @@ fun TransportCostApp(
                 Screen.HOME -> HomeScreen(
                     demoMode = demoMode,
                     demoStatus = demoStatus,
-                    vehicles = vehicles,
+                    vehicles = if (demoMode) vehicles.take(DemoManager.MAX_VEHICLES) else vehicles,
                     quotes = quotes,
                     onNewQuote = {
                         duplicateQuote = null
@@ -147,7 +147,7 @@ fun TransportCostApp(
                     onOpenHistory = { screen = Screen.HISTORY }
                 )
                 Screen.QUOTE -> QuoteScreen(
-                    vehicles = vehicles,
+                    vehicles = if (demoMode) vehicles.take(DemoManager.MAX_VEHICLES) else vehicles,
                     params = params,
                     showHelp = showHelp,
                     demoMode = demoMode,
@@ -158,7 +158,7 @@ fun TransportCostApp(
                     onSave = vm::saveQuote
                 )
                 Screen.VEHICLES -> VehiclesScreen(
-                    vehicles = vehicles,
+                    vehicles = if (demoMode) vehicles.take(DemoManager.MAX_VEHICLES) else vehicles,
                     showHelp = showHelp,
                     demoMode = demoMode,
                     onImport = { uri, replace ->
