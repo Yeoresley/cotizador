@@ -472,7 +472,7 @@ private fun VehicleFormDialog(
                                 serviceType = serviceType.trim(),
                                 vehicleValueUsd = v!!,
                                 equipmentValueUsd = e!!,
-                                totalAftUsd = v + e,
+                                totalAftUsd = calculatedAft,
                                 fuelKmPerLiter = fuel!!,
                                 notes = notes.trim()
                             )
